@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from hypercorn.asyncio import serve
 from hypercorn.config import Config
-from analyzer import generate_report  # ✅ import analyzer
+from analyzer import generate_report  # ✅ import analyzer terbaru
 
 # ====================================================
 # KONFIGURASI
@@ -40,7 +40,7 @@ logger = logging.getLogger("chananalysis")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Halo 👋, saya *Chananalysis Bot*!\n"
-        "Saya akan kirimkan laporan akumulasi asing tiap hari jam 08:00 WIB.\n"
+        "Saya kirimkan laporan akumulasi asing setiap hari jam 08:00 WIB.\n"
         "Ketik /id untuk lihat chat ID kamu.",
         parse_mode="Markdown"
     )
@@ -50,7 +50,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
 
 # ====================================================
-# ASYNC TELEGRAM BOT
+# BOT ASYNC
 # ====================================================
 async def run_bot():
     logger.info("🚀 Memulai Chananalysis Bot…")
@@ -72,16 +72,11 @@ def run_bot_background():
     asyncio.run(run_bot())
 
 # ====================================================
-# FUNGSI PENGIRIMAN PESAN TELEGRAM
+# KIRIM PESAN TELEGRAM
 # ====================================================
 def send_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         r = requests.post(url, json=payload, timeout=20)
         if r.status_code != 200:
@@ -111,7 +106,6 @@ def scheduler_thread():
     logger.info("🗓️ Menjadwalkan laporan harian jam %s UTC (~08:00 WIB)", SCHEDULE_UTC_TIME)
     schedule.clear()
     schedule.every().day.at(SCHEDULE_UTC_TIME).do(run_daily_job)
-
     while True:
         schedule.run_pending()
         time.sleep(5)
