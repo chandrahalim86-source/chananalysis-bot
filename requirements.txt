@@ -3,5 +3,4 @@ hypercorn
 python-telegram-bot==20.3
 requests
 schedule
-beautifulsoup4
 pandas
