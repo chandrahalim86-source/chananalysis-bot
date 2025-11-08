@@ -1,5 +1,2 @@
 python-telegram-bot==20.3
-requests
-pandas
-schedule
-beautifulsoup4
+Flask==2.3.2
