@@ -63,7 +63,7 @@ async def run_bot():
 
     try:
         await app.updater.start_polling(poll_interval=3)
-        await asyncio.Event().wait()  # tetap jalan
+        await asyncio.Event().wait()
     finally:
         await app.stop()
         await app.shutdown()
@@ -97,7 +97,6 @@ def send_message(text):
 def run_daily_job():
     now = datetime.now(timezone.utc)
     logger.info("🕗 Menjalankan job harian %s", now)
-
     try:
         report_text = generate_report()
         send_message(report_text)
