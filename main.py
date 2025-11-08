@@ -1,66 +1,145 @@
 import os
-from flask import Flask, request
+import logging
+import asyncio
+import threading
+import time
+import schedule
+import requests
+from datetime import datetime, timezone
+from flask import Flask
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-import requests, pandas as pd, schedule, threading, time, datetime
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
 
-# ----------------------------
+# ====================================================
 # KONFIGURASI
-# ----------------------------
+# ====================================================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL")  # otomatis diset oleh Render
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # isi manual nanti
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SCHEDULE_UTC_TIME = os.getenv("SCHEDULE_UTC_TIME", "01:00")  # 01:00 UTC ≈ 08:00 WIB
 
-app = Flask(__name__)
+if not TOKEN:
+    raise RuntimeError("⚠️ Missing TELEGRAM_BOT_TOKEN in environment variables")
+if not CHAT_ID:
+    raise RuntimeError("⚠️ Missing TELEGRAM_CHAT_ID in environment variables")
 
-# ----------------------------
-# TELEGRAM BOT
-# ----------------------------
-application = Application.builder().token(TOKEN).build()
+# ====================================================
+# LOGGING
+# ====================================================
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger("chananalysis")
 
+# ====================================================
+# HANDLER TELEGRAM
+# ====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot RTI-Stockbit aktif!\nAnda akan menerima laporan harian jam 08:00 WIB.")
+    await update.message.reply_text(
+        "Halo 👋, saya *Chananalysis Bot*!\n"
+        "Saya akan kirimkan laporan akumulasi asing tiap hari jam 08:00 WIB.\n"
+        "Ketik /id untuk lihat chat ID kamu.",
+        parse_mode="Markdown"
+    )
 
-application.add_handler(CommandHandler("start", start))
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
 
-# ----------------------------
-# LAPORAN HARIAN
-# ----------------------------
-def get_daily_report():
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    data = {"BBRI": 82, "BBCA": 79, "ASII": 68, "TLKM": 71, "ICBP": 88}
-    df = pd.DataFrame(list(data.items()), columns=["Saham", "Score"])
-    df.sort_values("Score", ascending=False, inplace=True)
-    report = f"📅 Laporan Saham {now}\n\n" + df.to_string(index=False)
-    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                  data={"chat_id": CHAT_ID, "text": report})
+# ====================================================
+# ASYNC BOT
+# ====================================================
+async def run_bot():
+    logger.info("🚀 Memulai Chananalysis Bot…")
+    app = ApplicationBuilder().token(TOKEN).build()
 
-def scheduler_loop():
-    schedule.every().day.at("08:00").do(get_daily_report)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
+
+    await app.initialize()
+    await app.start()
+    logger.info("✅ Bot Telegram aktif (polling).")
+
+    try:
+        await app.updater.start_polling(poll_interval=3)
+        await asyncio.Event().wait()  # tetap jalan
+    finally:
+        await app.stop()
+        await app.shutdown()
+
+def run_bot_background():
+    asyncio.run(run_bot())
+
+# ====================================================
+# JOB HARIAN
+# ====================================================
+def run_daily_job():
+    now = datetime.now(timezone.utc)
+    logger.info("🕗 Menjalankan job harian %s", now)
+
+    try:
+        # --- placeholder; nanti diganti modul scraper/analyzer ---
+        report_text = (
+            "📊 *Laporan Harian Chananalysis*\n\n"
+            "Data masih placeholder — modul analyzer/scraper belum diaktifkan.\n"
+            f"Timestamp: {datetime.now():%Y-%m-%d %H:%M WIB}"
+        )
+        send_message(report_text)
+    except Exception as e:
+        logger.exception("❌ Gagal menjalankan job harian: %s", e)
+
+def send_message(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code != 200:
+            logger.error("Gagal kirim Telegram message: %s - %s", r.status_code, r.text)
+        else:
+            logger.info("✅ Pesan terkirim ke Telegram.")
+    except Exception as e:
+        logger.exception("Gagal kirim pesan Telegram: %s", e)
+
+# ====================================================
+# SCHEDULER THREAD
+# ====================================================
+def scheduler_thread():
+    logger.info("🗓️ Menjadwalkan laporan harian jam %s UTC (~08:00 WIB)", SCHEDULE_UTC_TIME)
+    schedule.clear()
+    schedule.every().day.at(SCHEDULE_UTC_TIME).do(run_daily_job)
+
     while True:
         schedule.run_pending()
-        time.sleep(30)
+        time.sleep(5)
 
-threading.Thread(target=scheduler_loop, daemon=True).start()
-
-# ----------------------------
-# FLASK WEBHOOK
-# ----------------------------
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put(update)
-    return "ok", 200
-
-@app.before_first_request
-def set_webhook():
-    webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-    application.bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook set ke {webhook_url}")
+# ====================================================
+# FLASK APP
+# ====================================================
+app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Bot RTI-Stockbit aktif dan menunggu update Telegram."
+    return "✅ Chananalysis Bot aktif dan siap kirim laporan harian."
 
+def init_bot():
+    """Inisialisasi bot & scheduler tanpa before_first_request"""
+    threading.Thread(target=run_bot_background, daemon=True).start()
+    threading.Thread(target=scheduler_thread, daemon=True).start()
+    logger.info("✅ Bot dan scheduler background aktif.")
+
+# ====================================================
+# ENTRY POINT
+# ====================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    init_bot()  # Panggil manual; pengganti @app.before_first_request
+
+    config = Config()
+    config.bind = ["0.0.0.0:10000"]
+    asyncio.run(serve(app, config))
