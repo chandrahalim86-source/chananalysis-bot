@@ -11,6 +11,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from hypercorn.asyncio import serve
 from hypercorn.config import Config
+from analyzer import generate_report  # ✅ import analyzer
 
 # ====================================================
 # KONFIGURASI
@@ -49,15 +50,13 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
 
 # ====================================================
-# ASYNC BOT
+# ASYNC TELEGRAM BOT
 # ====================================================
 async def run_bot():
     logger.info("🚀 Memulai Chananalysis Bot…")
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", get_id))
-
     await app.initialize()
     await app.start()
     logger.info("✅ Bot Telegram aktif (polling).")
@@ -73,23 +72,8 @@ def run_bot_background():
     asyncio.run(run_bot())
 
 # ====================================================
-# JOB HARIAN
+# FUNGSI PENGIRIMAN PESAN TELEGRAM
 # ====================================================
-def run_daily_job():
-    now = datetime.now(timezone.utc)
-    logger.info("🕗 Menjalankan job harian %s", now)
-
-    try:
-        # --- placeholder; nanti diganti modul scraper/analyzer ---
-        report_text = (
-            "📊 *Laporan Harian Chananalysis*\n\n"
-            "Data masih placeholder — modul analyzer/scraper belum diaktifkan.\n"
-            f"Timestamp: {datetime.now():%Y-%m-%d %H:%M WIB}"
-        )
-        send_message(report_text)
-    except Exception as e:
-        logger.exception("❌ Gagal menjalankan job harian: %s", e)
-
 def send_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
@@ -106,6 +90,20 @@ def send_message(text):
             logger.info("✅ Pesan terkirim ke Telegram.")
     except Exception as e:
         logger.exception("Gagal kirim pesan Telegram: %s", e)
+
+# ====================================================
+# JOB HARIAN
+# ====================================================
+def run_daily_job():
+    now = datetime.now(timezone.utc)
+    logger.info("🕗 Menjalankan job harian %s", now)
+
+    try:
+        report_text = generate_report()
+        send_message(report_text)
+    except Exception as e:
+        logger.exception("❌ Gagal membuat laporan: %s", e)
+        send_message(f"❌ Gagal membuat laporan: {e}")
 
 # ====================================================
 # SCHEDULER THREAD
@@ -129,7 +127,6 @@ def index():
     return "✅ Chananalysis Bot aktif dan siap kirim laporan harian."
 
 def init_bot():
-    """Inisialisasi bot & scheduler tanpa before_first_request"""
     threading.Thread(target=run_bot_background, daemon=True).start()
     threading.Thread(target=scheduler_thread, daemon=True).start()
     logger.info("✅ Bot dan scheduler background aktif.")
@@ -138,8 +135,7 @@ def init_bot():
 # ENTRY POINT
 # ====================================================
 if __name__ == "__main__":
-    init_bot()  # Panggil manual; pengganti @app.before_first_request
-
+    init_bot()
     config = Config()
     config.bind = ["0.0.0.0:10000"]
     asyncio.run(serve(app, config))
