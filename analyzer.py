@@ -16,8 +16,8 @@ RTI_FOREIGN_URL = "https://rti.co.id/stock/foreign"
 # ====================================================
 # LOGIN RTI & FETCH DATA
 # ====================================================
-def fetch_rti_data():
-    """Login ke RTI dan ambil data net buy/sell foreign"""
+def fetch_rti_data(days=7):
+    """Login ke RTI dan ambil data net buy/sell foreign untuk n hari ke belakang"""
     session = requests.Session()
     login_payload = {"email": RTI_EMAIL, "password": RTI_PASSWORD}
 
@@ -26,7 +26,7 @@ def fetch_rti_data():
         raise Exception(f"Gagal login RTI: {r.text}")
 
     data = []
-    for i in range(7):  # 7 hari ke belakang
+    for i in range(days):
         d = datetime.now() - timedelta(days=i)
         url = f"{RTI_FOREIGN_URL}?date={d:%Y-%m-%d}"
         res = session.get(url)
@@ -46,8 +46,7 @@ def fetch_rti_data():
                         })
                     except:
                         continue
-    df = pd.DataFrame(data)
-    return df
+    return pd.DataFrame(data)
 
 # ====================================================
 # ANALISA AKUMULASI ASING
@@ -59,13 +58,24 @@ def calculate_foreign_accumulation(df):
         group = group.sort_values("date", ascending=True)
         group["net_buy"] = group["foreign_buy"] - group["foreign_sell"]
 
+        # 1️⃣ Total akumulasi asing 7 hari terakhir
         streak = (group["net_buy"] > 0).sum()
-        if streak >= 5:
+
+        # 2️⃣ Deteksi fase keluar asing (hari negatif berturut-turut)
+        outflow_days = 0
+        for val in group["net_buy"][::-1]:
+            if val < 0:
+                outflow_days += 1
+            else:
+                break
+
+        if streak >= 2:  # minimal 2 hari akumulasi
             total_buy = group["foreign_buy"].sum()
             avg_price = (group["price"] * group["foreign_buy"]).sum() / total_buy
             result.append({
                 "symbol": symbol,
                 "foreign_streak": streak,
+                "outflow_days": outflow_days,
                 "total_buy": total_buy,
                 "avg_price": round(avg_price, 2)
             })
@@ -92,13 +102,14 @@ def fetch_stockbit_data(symbol):
         return {"symbol": symbol, "last_price": None, "volume": None}
 
 # ====================================================
-# SCORING SYSTEM
+# SCORING SYSTEM (CHAN SCORE)
 # ====================================================
 def calculate_chan_score(row):
-    streak = min(row["foreign_streak"], 7) / 7
-    stability = 1
-    net_ratio = 1
-    score = (streak*0.4 + stability*0.3 + net_ratio*0.3) * 100
+    """Skor gabungan akumulasi asing dan kestabilan harga"""
+    streak_score = min(row["foreign_streak"], 7) / 7  # maksimal 7 hari akumulasi
+    outflow_penalty = max(0, 1 - (row["outflow_days"] / 5))  # penalti jika asing keluar
+    stability = 0.8 + 0.2 * outflow_penalty
+    score = (streak_score * 0.5 + stability * 0.5) * 100
     return round(score, 1)
 
 # ====================================================
@@ -117,11 +128,16 @@ def generate_report():
     for _, row in acc.iterrows():
         sb = fetch_stockbit_data(row["symbol"])
         score = calculate_chan_score(row)
+
+        phase = "⚠️ Asing mulai keluar" if row["outflow_days"] >= 4 else "✅ Masih akumulasi"
+
         reports.append(
-            f"📈 *{row['symbol']}* — Asing beli {row['total_buy']:,} (7 hari)\n"
-            f"Rata-rata beli asing: {row['avg_price']:,}\n"
-            f"Harga terakhir: {sb['last_price'] or '-'}\n"
-            f"ChanScore: {score}/100\n"
+            f"📈 *{row['symbol']}*\n"
+            f"• Akumulasi asing {row['foreign_streak']} hari\n"
+            f"• Rata-rata beli asing: {row['avg_price']:,}\n"
+            f"• Harga terakhir: {sb['last_price'] or '-'}\n"
+            f"• Outflow: {row['outflow_days']} hari ({phase})\n"
+            f"• ChanScore: {score}/100\n"
         )
 
     return "📊 *Laporan Akumulasi Asing (7 Hari)*\n\n" + "\n".join(reports)
