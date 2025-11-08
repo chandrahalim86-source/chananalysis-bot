@@ -8,12 +8,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BOT_URL = "https://foreign-flow-monitor.onrender.com"
 
-# Inisialisasi Flask & Telegram
 app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
 
 
-# === Command handler ===
+# === Command handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Bot Chananalysis7878 aktif!\nSaya akan kirim analisa saham jam 18:00 WIB setiap hari.")
 
@@ -25,21 +24,22 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("id", get_id))
 
 
-# === Webhook handler ===
+# === Web routes ===
 @app.route("/", methods=["GET"])
 def index():
-    return "✅ Chananalysis7878 aktif dan siap menerima webhook dari Telegram!"
+    return "✅ Chananalysis7878 aktif dan webhook siap!"
 
 
 @app.route(f"/{TOKEN}", methods=["POST"])
-async def receive_update():
+def webhook_update():
+    """Terima update dari Telegram"""
     data = request.get_json(force=True)
     update = Update.de_json(data, application.bot)
-    await application.process_update(update)
+    asyncio.run(application.process_update(update))
     return "OK", 200
 
 
-# === Jalankan Flask + setup webhook di startup ===
+# === Jalankan Flask dan setup webhook ===
 async def setup_webhook():
     webhook_url = f"{BOT_URL}/{TOKEN}"
     await application.bot.delete_webhook()
@@ -49,6 +49,5 @@ async def setup_webhook():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(setup_webhook())
+    asyncio.run(setup_webhook())
     app.run(host="0.0.0.0", port=port)
