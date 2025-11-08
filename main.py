@@ -1,40 +1,55 @@
 import os
-import asyncio
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from flask import Flask, request
-import threading
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ===== Telegram Commands =====
+# === Telegram bot setup ===
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+BOT_URL = f"https://foreign-flow-monitor.onrender.com"
+
+app = Flask(__name__)
+application = Application.builder().token(TOKEN).build()
+
+
+# === Command Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot aktif ✅\nSaya akan kirim analisa saham setiap jam 18:00 WIB.")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    await update.message.reply_text(f"Chat ID kamu: {chat_id}")
+    await update.message.reply_text(f"Chat ID kamu: {update.message.chat_id}")
 
-# ===== Flask App =====
-app = Flask(__name__)
 
+# Tambahkan handler ke bot
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("id", get_id))
+
+
+# === Flask Routes ===
 @app.route("/")
 def home():
-    return "Bot Chananalysis7878 aktif di Render 🚀"
+    return "🤖 Chananalysis7878 aktif dengan Webhook di Render!"
 
-# ===== Jalankan Telegram bot di background =====
-def run_bot():
-    async def main():
-        application = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("id", get_id))
-        print("🤖 Telegram bot aktif dan polling dimulai...")
-        await application.run_polling(close_loop=False)
-    
-    asyncio.run(main())
 
+@app.route(f"/{TOKEN}", methods=["POST"])
+async def telegram_webhook():
+    """Webhook endpoint untuk menerima update dari Telegram"""
+    data = request.get_json(force=True)
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return "OK", 200
+
+
+# === Setup webhook saat server mulai ===
+@app.before_first_request
+def init_webhook():
+    import asyncio
+    loop = asyncio.get_event_loop()
+    webhook_url = f"{BOT_URL}/{TOKEN}"
+    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+    print(f"✅ Webhook diset di: {webhook_url}")
+
+
+# === Run Flask server ===
 if __name__ == "__main__":
-    # Jalankan Telegram bot di thread terpisah
-    threading.Thread(target=run_bot, daemon=True).start()
-    
-    # Jalankan Flask agar Render melihat port aktif
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
