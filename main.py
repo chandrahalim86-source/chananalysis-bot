@@ -1,5 +1,6 @@
 import os
 import asyncio
+import threading
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -9,6 +10,8 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 BOT_URL = "https://foreign-flow-monitor.onrender.com"
 
 app = Flask(__name__)
+
+# === Inisialisasi aplikasi Telegram ===
 application = Application.builder().token(TOKEN).build()
 
 
@@ -18,7 +21,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Chat ID kamu: {update.message.chat_id}")
-
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("id", get_id))
@@ -39,15 +41,25 @@ def webhook_update():
     return "OK", 200
 
 
-# === Jalankan Flask dan setup webhook ===
-async def setup_webhook():
+# === Jalankan bot di background thread ===
+def run_bot():
+    asyncio.run(start_bot())
+
+
+async def start_bot():
+    await application.initialize()
+    await application.start()
     webhook_url = f"{BOT_URL}/{TOKEN}"
-    await application.bot.delete_webhook()
     await application.bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook diset ke: {webhook_url}")
+    print(f"✅ Webhook aktif di {webhook_url}")
+    await application.updater.start_polling()
+    await application.wait_until_closed()
 
 
 if __name__ == "__main__":
+    # Jalankan Telegram bot di thread terpisah
+    threading.Thread(target=run_bot, daemon=True).start()
+
+    # Jalankan Flask server
     port = int(os.environ.get("PORT", 5000))
-    asyncio.run(setup_webhook())
     app.run(host="0.0.0.0", port=port)
