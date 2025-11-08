@@ -1,75 +1,78 @@
 import os
 import logging
-from flask import Flask, request
+import asyncio
+from flask import Flask
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# === Setup logging ===
+# ------------------------------
+# KONFIGURASI
+# ------------------------------
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8488195293:AAE13Lzf11qQ4gc1dsH5uRHn0FvZo1nvxDg")
+
+# ------------------------------
+# LOGGING
+# ------------------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# === Konfigurasi dasar ===
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-BOT_URL = "https://foreign-flow-monitor.onrender.com"  # Ganti jika nama service berubah
-WEBHOOK_PATH = f"/{TOKEN}"
-WEBHOOK_URL = f"{BOT_URL}{WEBHOOK_PATH}"
-
-app = Flask(__name__)
-application = Application.builder().token(TOKEN).build()
-
-
-# === Command Handlers ===
+# ------------------------------
+# HANDLER TELEGRAM
+# ------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Hai! Bot Chananalysis aktif.\nSaya akan mengirim analisa saham setiap jam 18:00 WIB."
+        "Halo 👋, saya *Chananalysis Bot*!\nKetik /id untuk melihat chat ID kamu.",
+        parse_mode="Markdown"
     )
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Chat ID kamu: {update.effective_chat.id}")
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"Chat ID kamu adalah: `{chat_id}`", parse_mode="Markdown")
 
+# ------------------------------
+# INISIALISASI TELEGRAM BOT (ASYNC)
+# ------------------------------
+async def run_bot():
+    logger.info("Memulai Chananalysis Bot...")
+    application = ApplicationBuilder().token(TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("id", get_id))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("id", get_id))
 
+    await application.initialize()
+    await application.start()
+    logger.info("Bot Telegram berjalan (polling aktif).")
 
-# === Flask Routes ===
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ Chananalysis Bot aktif dan webhook siap!"
-
-
-@app.route(WEBHOOK_PATH, methods=["POST"])
-async def webhook():
-    """Terima update dari Telegram"""
+    # Loop polling
     try:
-        data = request.get_json(force=True)
-        update = Update.de_json(data, application.bot)
-        await application.process_update(update)
-    except Exception as e:
-        logging.error(f"Error processing update: {e}")
-        return "Error", 500
-    return "OK", 200
+        await application.updater.start_polling(poll_interval=3)
+        await asyncio.Event().wait()  # biar tetap jalan
+    finally:
+        await application.stop()
+        await application.shutdown()
 
+# ------------------------------
+# FLASK APP (ASYNC)
+# ------------------------------
+app = Flask(__name__)
 
-# === Start-up Function ===
-async def setup_webhook():
-    # Hapus webhook lama dan set yang baru
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    logging.info(f"✅ Webhook set ke {WEBHOOK_URL}")
+@app.route("/")
+async def index():
+    return "✅ Chananalysis Bot sedang berjalan dengan async polling!"
 
-
-def main():
-    import asyncio
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(setup_webhook())
-
-    # Jalankan Flask di foreground
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-
+# ------------------------------
+# MAIN ENTRY POINT
+# ------------------------------
 if __name__ == "__main__":
-    main()
+    # Jalankan Flask di event loop utama
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Jalankan bot di background task
+    loop.create_task(run_bot())
+
+    # Jalankan Flask server
+    app.run(host="0.0.0.0", port=10000)
