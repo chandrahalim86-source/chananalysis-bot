@@ -67,12 +67,18 @@ async def index():
 # MAIN ENTRY POINT
 # ------------------------------
 if __name__ == "__main__":
-    # Jalankan Flask di event loop utama
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     # Jalankan bot di background task
     loop.create_task(run_bot())
 
-    # Jalankan Flask server
-    app.run(host="0.0.0.0", port=10000)
+    # Jalankan Flask server di loop yang sama
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = ["0.0.0.0:10000"]
+
+    # Jalankan Flask via Hypercorn (async-safe)
+    loop.run_until_complete(serve(app, config))
