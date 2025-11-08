@@ -1,70 +1,135 @@
 import os
 import logging
 import asyncio
+import threading
+import time
+import schedule
+import requests
+from datetime import datetime, timezone
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
 
 # ------------------------------
 # KONFIGURASI
 # ------------------------------
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8488195293:AAE13Lzf11qQ4gc1dsH5uRHn0FvZo1nvxDg")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SCHEDULE_UTC_TIME = os.getenv("SCHEDULE_UTC_TIME", "01:00")  # 01:00 UTC = 08:00 WIB
+
+if not TOKEN:
+    raise RuntimeError("⚠️ Missing TELEGRAM_BOT_TOKEN in environment variables")
+if not CHAT_ID:
+    raise RuntimeError("⚠️ Missing TELEGRAM_CHAT_ID in environment variables")
 
 # ------------------------------
 # LOGGING
 # ------------------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chananalysis")
 
 # ------------------------------
 # HANDLER TELEGRAM
 # ------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Halo 👋, saya *Chananalysis Bot*!\nKetik /id untuk melihat chat ID kamu.",
+        "Halo 👋, saya *Chananalysis Bot*!\n"
+        "Saya akan kirimkan laporan akumulasi asing tiap hari jam 08:00 WIB.\n"
+        "Ketik /id untuk lihat chat ID kamu.",
         parse_mode="Markdown"
     )
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
-    await update.message.reply_text(f"Chat ID kamu adalah: `{chat_id}`", parse_mode="Markdown")
+    await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
 
 # ------------------------------
-# INISIALISASI TELEGRAM BOT (ASYNC)
+# ASYNC TELEGRAM BOT
 # ------------------------------
 async def run_bot():
-    logger.info("Memulai Chananalysis Bot...")
-    application = ApplicationBuilder().token(TOKEN).build()
+    logger.info("🚀 Memulai Chananalysis Bot...")
+    app = ApplicationBuilder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("id", get_id))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
 
-    await application.initialize()
-    await application.start()
-    logger.info("Bot Telegram berjalan (polling aktif).")
+    await app.initialize()
+    await app.start()
+    logger.info("✅ Bot Telegram aktif (polling).")
 
-    # Loop polling
+    # Jalankan polling terus-menerus
     try:
-        await application.updater.start_polling(poll_interval=3)
-        await asyncio.Event().wait()  # biar tetap jalan
+        await app.updater.start_polling(poll_interval=3)
+        await asyncio.Event().wait()  # tetap jalan
     finally:
-        await application.stop()
-        await application.shutdown()
+        await app.stop()
+        await app.shutdown()
 
 # ------------------------------
-# FLASK APP (ASYNC)
+# DAILY JOB (dijalankan oleh schedule)
+# ------------------------------
+def run_daily_job():
+    now = datetime.now(timezone.utc)
+    logger.info("🕗 Menjalankan job harian %s", now)
+
+    try:
+        # --- nanti diganti dengan logic analyzer real ---
+        report_text = (
+            "📊 *Laporan Harian Chananalysis*\n\n"
+            "Data masih placeholder — modul analyzer/scraper belum diaktifkan.\n"
+            f"Timestamp: {datetime.now():%Y-%m-%d %H:%M WIB}"
+        )
+
+        send_message(report_text)
+    except Exception as e:
+        logger.exception("❌ Gagal menjalankan job harian: %s", e)
+
+def send_message(text):
+    """Kirim pesan langsung ke Telegram tanpa async."""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code != 200:
+            logger.error("Gagal kirim Telegram message: %s - %s", r.status_code, r.text)
+        else:
+            logger.info("✅ Pesan terkirim ke Telegram.")
+    except Exception as e:
+        logger.exception("Gagal kirim pesan Telegram: %s", e)
+
+# ------------------------------
+# SCHEDULER THREAD
+# ------------------------------
+def scheduler_thread():
+    logger.info("🗓️ Menjadwalkan laporan harian jam %s UTC (~08:00 WIB)", SCHEDULE_UTC_TIME)
+    schedule.clear()
+    schedule.every().day.at(SCHEDULE_UTC_TIME).do(run_daily_job)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(5)
+
+# ------------------------------
+# FLASK APP
 # ------------------------------
 app = Flask(__name__)
 
 @app.route("/")
 async def index():
-    return "✅ Chananalysis Bot sedang berjalan dengan async polling!"
+    return "✅ Chananalysis Bot aktif dan siap kirim laporan harian."
 
 # ------------------------------
-# MAIN ENTRY POINT
+# ENTRY POINT
 # ------------------------------
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
@@ -73,12 +138,10 @@ if __name__ == "__main__":
     # Jalankan bot di background task
     loop.create_task(run_bot())
 
-    # Jalankan Flask server di loop yang sama
-    from hypercorn.asyncio import serve
-    from hypercorn.config import Config
+    # Jalankan scheduler di thread terpisah
+    threading.Thread(target=scheduler_thread, daemon=True).start()
 
+    # Jalankan Flask (agar Render tetap aktif)
     config = Config()
     config.bind = ["0.0.0.0:10000"]
-
-    # Jalankan Flask via Hypercorn (async-safe)
     loop.run_until_complete(serve(app, config))
