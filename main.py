@@ -1,154 +1,149 @@
-# main.py
-"""
-Main entrypoint for Chananalysis Bot (Render-ready).
-- Background polling Telegram (polling mode) to avoid webhook conflicts
-- Scheduler sends report every morning 08:00 WIB and evening 18:00 WIB (UTC times configurable)
-- Uses analyzer.generate_report() to build message
-"""
-
 import os
+import logging
+import asyncio
 import threading
 import time
 import schedule
-import logging
-import asyncio
-from datetime import datetime
+import requests
+from datetime import datetime, timezone
 from flask import Flask
-from telegram import Bot
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from analyzer import generate_report
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
+from analyzer import generate_report  # ✅ import yang benar
 
-# -------------------------
-# Config from env
-# -------------------------
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SCHEDULE_UTC_MORNING = os.getenv("SCHEDULE_UTC_MORNING", "01:00")  # 01:00 UTC == 08:00 WIB
-SCHEDULE_UTC_EVENING = os.getenv("SCHEDULE_UTC_EVENING", "11:00")  # 11:00 UTC == 18:00 WIB
-TOP_N = int(os.getenv("TOP_N", "5"))
+# ====================================================
+# KONFIGURASI ENVIRONMENT
+# ====================================================
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+SCHEDULE_UTC_MORNING = os.getenv("SCHEDULE_UTC_MORNING", "01:00")  # 08:00 WIB
+SCHEDULE_UTC_EVENING = os.getenv("SCHEDULE_UTC_EVENING", "11:00")  # 18:00 WIB
 
-if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in environment variables")
+if not TOKEN:
+    raise RuntimeError("⚠️ Missing TELEGRAM_BOT_TOKEN in environment variables")
+if not CHAT_ID:
+    raise RuntimeError("⚠️ Missing TELEGRAM_CHAT_ID in environment variables")
 
-# -------------------------
-# Logging
-# -------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("chananalysis-main")
+# ====================================================
+# LOGGING
+# ====================================================
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger("chananalysis")
 
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-app = Flask(__name__)
+# ====================================================
+# HANDLER TELEGRAM
+# ====================================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Halo 👋, saya *Chananalysis Bot Pro*!\n"
+        "Saya akan kirimkan laporan akumulasi asing & ritel setiap hari:\n"
+        "🕗 08:00 WIB — Laporan Harian\n"
+        "🕕 18:00 WIB — Evaluasi Sore\n\n"
+        "Ketik /id untuk lihat chat ID kamu.",
+        parse_mode="Markdown"
+    )
 
-# -------------------------
-# Telegram command handlers
-# -------------------------
-async def start_handler(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo 👋 Chananalysis bot aktif. Laporan dikirim jam 08:00 & 18:00 WIB.")
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
 
-async def id_handler(update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Chat ID: {update.message.chat_id}")
+# ====================================================
+# TELEGRAM BOT
+# ====================================================
+async def run_bot():
+    logger.info("🚀 Memulai Chananalysis Bot…")
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
 
-# -------------------------
-# Telegram polling runner (background thread)
-# -------------------------
-def run_telegram_polling():
-    async def _run():
-        # ensure webhook removed to avoid conflict
-        try:
-            await bot.delete_webhook()
-        except Exception:
-            pass
-        app_t = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-        app_t.add_handler(CommandHandler("start", start_handler))
-        app_t.add_handler(CommandHandler("id", id_handler))
-        await app_t.initialize()
-        await app_t.start()
-        logger.info("Telegram polling started.")
-        try:
-            await app_t.updater.start_polling()
-            await asyncio.Event().wait()
-        finally:
-            await app_t.stop()
-            await app_t.shutdown()
+    await app.initialize()
+    await app.start()
+    logger.info("✅ Bot Telegram aktif (polling).")
 
     try:
-        asyncio.run(_run())
-    except Exception as e:
-        logger.exception("Telegram polling ended: %s", e)
+        await app.updater.start_polling(poll_interval=3)
+        await asyncio.Event().wait()
+    finally:
+        await app.stop()
+        await app.shutdown()
 
-# -------------------------
-# Send message util
-# -------------------------
-def send_text(text):
+def run_bot_background():
+    asyncio.run(run_bot())
+
+# ====================================================
+# FUNGSI KIRIM PESAN TELEGRAM
+# ====================================================
+def send_message(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
     try:
-        bot.send_message(chat_id=int(TELEGRAM_CHAT_ID), text=text, parse_mode="Markdown", disable_web_page_preview=True)
-        logger.info("Message sent.")
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code != 200:
+            logger.error("❌ Gagal kirim Telegram message: %s - %s", r.status_code, r.text)
+        else:
+            logger.info("✅ Pesan terkirim ke Telegram.")
     except Exception as e:
-        logger.exception("Failed to send message: %s", e)
+        logger.exception("Gagal kirim pesan Telegram: %s", e)
 
-# -------------------------
-# Job: build + send report
-# -------------------------
-def job_send_reports():
-    logger.info("Running analysis job...")
+# ====================================================
+# JOB HARIAN
+# ====================================================
+def run_daily_job(period="morning"):
+    now = datetime.now(timezone.utc)
+    logger.info("🕗 Menjalankan job harian (%s) — %s", period, now)
+
     try:
-        report = generate_report(top_n=TOP_N)
-        send_text(report)
-        # optionally send short watchlist (top 3 lines)
-        # quick parse: take first N bullet lines starting with '*' and containing 'Asing'
-        lines = report.splitlines()
-        watch = []
-        for ln in lines:
-            if ln.strip().startswith("*") and ("Asing" in ln or "Asing" in ln):
-                watch.append(ln.strip())
-            if len(watch) >= 3:
-                break
-        if watch:
-            send_text("🔥 *Watchlist Alert (Top signals)*\n" + "\n".join(watch))
+        report_text = generate_report(period=period)
+        send_message(report_text)
     except Exception as e:
-        logger.exception("Daily job failed: %s", e)
-        send_text(f"❌ Daily job failed: {e}")
+        logger.exception("❌ Gagal membuat laporan (%s): %s", period, e)
+        send_message(f"❌ Gagal membuat laporan ({period}): {e}")
 
-# -------------------------
-# Scheduler thread
-# -------------------------
+# ====================================================
+# SCHEDULER THREAD
+# ====================================================
 def scheduler_thread():
+    logger.info(
+        "🗓️ Menjadwalkan laporan pagi jam %s UTC (~08:00 WIB) dan sore jam %s UTC (~18:00 WIB)",
+        SCHEDULE_UTC_MORNING, SCHEDULE_UTC_EVENING
+    )
     schedule.clear()
-    schedule.every().day.at(SCHEDULE_UTC_MORNING).do(job_send_reports)
-    schedule.every().day.at(SCHEDULE_UTC_EVENING).do(job_send_reports)
-    logger.info(f"Scheduler set: morning {SCHEDULE_UTC_MORNING} UTC, evening {SCHEDULE_UTC_EVENING} UTC")
+    schedule.every().day.at(SCHEDULE_UTC_MORNING).do(run_daily_job, period="morning")
+    schedule.every().day.at(SCHEDULE_UTC_EVENING).do(run_daily_job, period="evening")
+
     while True:
         schedule.run_pending()
-        time.sleep(8)
+        time.sleep(5)
 
-# -------------------------
-# Flask endpoints
-# -------------------------
+# ====================================================
+# FLASK APP
+# ====================================================
+app = Flask(__name__)
+
 @app.route("/")
 def index():
-    return "Chananalysis Bot running."
+    return "✅ Chananalysis Bot Pro aktif dan siap kirim laporan harian & sore."
 
-# -------------------------
-# Entry
-# -------------------------
+def init_bot():
+    threading.Thread(target=run_bot_background, daemon=True).start()
+    threading.Thread(target=scheduler_thread, daemon=True).start()
+    logger.info("✅ Bot dan scheduler background aktif.")
+
+# ====================================================
+# ENTRY POINT
+# ====================================================
 if __name__ == "__main__":
-    # Start polling & scheduler in background threads
-    t = threading.Thread(target=run_telegram_polling, daemon=True)
-    t.start()
-    s = threading.Thread(target=scheduler_thread, daemon=True)
-    s.start()
-
-    # Start Flask app (Render will run this via hypercorn/gunicorn or builtin)
-    try:
-        # Use hypercorn if present for production async safety
-        from hypercorn.asyncio import serve
-        from hypercorn.config import Config
-        import asyncio
-        config = Config()
-        port = int(os.getenv("PORT", "10000"))
-        config.bind = [f"0.0.0.0:{port}"]
-        logger.info("Starting hypercorn server...")
-        asyncio.run(serve(app, config))
-    except Exception:
-        logger.info("Starting Flask builtin server...")
-        app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    init_bot()
+    config = Config()
+    config.bind = ["0.0.0.0:10000"]
+    asyncio.run(serve(app, config))
