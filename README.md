@@ -1,27 +1,24 @@
-# Smart Adaptive Pro v3.0 – Final Stable
-Bot analisis otomatis saham dengan fokus pada akumulasi asing dan kekuatan tren teknikal 15 hari terakhir.
+# 📊 Smart Adaptive Pro v2.3 — Telegram Foreign Flow Analyzer
 
-## 🔍 Fitur Utama
-- Analisa otomatis 20 saham dengan foreign accumulation tertinggi (15 hari terakhir)
-- Penilaian ChanScore untuk deteksi akumulasi/distribusi
-- Kesimpulan otomatis berbasis tren
-- Jadwal kirim otomatis setiap hari jam 18:00 WIB ke Telegram
-- Bisa juga dijalankan manual via endpoint `/analyze`
+## 🔧 Fitur Utama
+- Analisa otomatis **jam 18:00 WIB** setiap hari
+- Analisa manual kapanpun via Telegram command `/analyze`
+- Berdasarkan data **Foreign Buy/Sell & Harga (RTI/Stockbit)**
+- Deteksi **divergensi asing vs ritel (early reversal)**
+- **Interpretasi otomatis & fleksibel**
+- Kirim laporan Telegram format teks profesional (20 saham teratas)
 
-## 🚀 Cara Deploy di Render
-1. Upload semua file (`main.py`, `analyzer.py`, `requirements.txt`, `README.md`)
-2. Tambahkan environment variables:
-TELEGRAM_TOKEN=...
-TELEGRAM_CHAT_ID=...
-Start command:
+## 🧠 Parameter Environment
+
+| Key | Value | Keterangan |
+|-----|--------|------------|
+| ANALYSIS_PERIOD | 15 | Periode analisa (hari) |
+| TOP_N | 20 | Jumlah saham top akumulasi |
+| MIN_LIQUIDITY_VALUE | 10000000000 | Filter likuiditas min Rp 10 M |
+| SCHEDULE_UTC_EVENING | 11:00 | Jam 18:00 WIB |
+| TELEGRAM_BOT_TOKEN | `xxxxxxxx` | Token bot kamu |
+| TELEGRAM_CHAT_ID | `xxxxxxxx` | Chat ID kamu |
+
+## 🚀 Cara Jalankan Manual
+```bash
 python main.py
-Jalankan manual via browser:
-https://your-app-url.onrender.com/analyze
-## 📅 Jadwal
-- Otomatis kirim laporan setiap hari pukul **18:00 WIB**
-- Manual trigger: `/analyze`
-
-## 📞 Output Format
-- 20 saham dengan foreign accumulation tertinggi
-- ChanScore dan interpretasi akurat
-- Kesimpulan otomatis tiap saham
