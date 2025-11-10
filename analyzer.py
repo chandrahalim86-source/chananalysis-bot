@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
-def analyze_foreign_flow(data, period=15):
+def analyze_foreign_flow(data: dict, period: int = 15):
+    """
+    Menganalisa akumulasi dan distribusi asing dari data saham.
+    Data: dict {symbol: DataFrame[close, foreign_net, retail_net, value]}
+    """
     results = []
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -11,62 +15,88 @@ def analyze_foreign_flow(data, period=15):
         if len(df) < period:
             continue
 
-        avg_foreign = df['foreign_net'].mean()
+        # --- Perhitungan dasar ---
         net_foreign = df['foreign_net'].sum()
         net_retail = df['retail_net'].sum()
-        last_price = df['close'].iloc[-1]
+        avg_foreign = df['foreign_net'].mean()
         avg_value = df['value'].mean()
-        price_change = (last_price - df['close'].iloc[0]) / df['close'].iloc[0] * 100
-
-        corr = df['foreign_net'].corr(df['retail_net'])
-        divergensi = "Yes" if corr < -0.5 else "No"
-
+        last_price = df['close'].iloc[-1]
+        first_price = df['close'].iloc[0]
+        price_change = (last_price - first_price) / first_price * 100
         foreign_sell_days = (df['foreign_net'] < 0).sum()
-        trend = "Uptrend" if price_change > 3 else ("Downtrend" if price_change < -3 else "Sideways")
 
-        # ChanScore
-        chscore = max(0, min(100, 50 + (corr * -50) + (price_change / 2)))
+        # --- Korelasi & Divergensi ---
+        corr = df['foreign_net'].corr(df['retail_net'])
+        divergensi = "Yes" if corr is not np.nan and corr < -0.5 else "No"
 
-        # Generate kesimpulan otomatis
-        if divergensi == "Yes" and net_foreign < 0 and trend == "Uptrend":
+        # --- Penentuan tren harga ---
+        if price_change > 5:
+            trend = "Uptrend"
+        elif price_change < -5:
+            trend = "Downtrend"
+        else:
+            trend = "Sideways"
+
+        # --- ChanScore (stabilitas akumulasi) ---
+        chscore = 50
+        chscore += (price_change / 2)
+        chscore += (-corr * 25)
+        chscore += (10 if net_foreign > 0 else -10)
+        chscore = max(0, min(100, round(chscore, 1)))
+
+        # --- Kesimpulan Otomatis ---
+        if net_foreign > 0 and trend == "Uptrend":
             kesimpulan = (
-                "Asing distribusi tapi ada divergensi kuat dengan ritel — indikasi hidden accumulation. "
-                "Selama tren naik bertahan, boleh hold / tambah saat melemah."
+                "Asing akumulasi kuat sejalan tren naik — momentum masih positif. "
+                "Hold atau tambah posisi saat melemah."
             )
-        elif net_foreign > 0 and trend == "Uptrend":
+        elif net_foreign > 0 and trend == "Downtrend":
             kesimpulan = (
-                "Asing akumulasi konsisten di tengah tren naik — momentum positif masih berlanjut."
+                "Asing mulai akumulasi meski tren turun — sinyal awal potensi reversal. "
+                "Pantau volume dan harga penutupan 2-3 hari ke depan."
             )
         elif net_foreign < 0 and trend == "Downtrend":
             kesimpulan = (
-                "Asing distribusi di tengah tren turun — potensi lanjut koreksi, pertimbangkan take profit."
+                "Asing distribusi di tengah tren turun — potensi lanjut koreksi, "
+                "take profit atau kurangi posisi disarankan."
             )
-        elif divergensi == "Yes" and trend == "Downtrend":
-            kesimpulan = (
-                "Harga turun tapi ritel akumulasi — potensi early reversal bila tekanan jual asing melemah."
-            )
+        elif net_foreign < 0 and trend == "Uptrend":
+            if divergensi == "Yes":
+                kesimpulan = (
+                    "Asing distribusi namun ada divergensi kuat dengan ritel — "
+                    "indikasi hidden accumulation. "
+                    "Selama harga bertahan, hold atau tambah saat koreksi ringan."
+                )
+            else:
+                kesimpulan = (
+                    "Asing distribusi di tengah tren naik — potensi pelemahan jangka pendek, "
+                    "gunakan trailing stop."
+                )
         else:
             kesimpulan = (
-                "Pergerakan netral, tunggu konfirmasi arah dari akumulasi asing berikutnya."
+                "Pergerakan netral, belum ada sinyal dominan dari asing atau ritel."
             )
 
         result = {
             "symbol": symbol,
-            "foreign_sell_days": foreign_sell_days,
             "period": period,
+            "foreign_sell_days": foreign_sell_days,
             "avg_foreign": round(avg_foreign, 2),
-            "last_price": int(last_price),
+            "net_foreign": round(net_foreign, 2),
+            "net_retail": round(net_retail, 2),
+            "avg_value": round(avg_value, 2),
             "price_change": round(price_change, 2),
-            "net_foreign": net_foreign,
-            "net_retail": net_retail,
-            "avg_value": avg_value,
+            "last_price": int(last_price),
             "corr": round(corr, 2) if not np.isnan(corr) else 0,
             "divergensi": divergensi,
             "trend": trend,
-            "chscore": round(chscore, 1),
+            "chscore": chscore,
             "kesimpulan": kesimpulan,
             "timestamp": now
         }
+
         results.append(result)
 
-    return sorted(results, key=lambda x: abs(x['net_foreign']), reverse=True)
+    # Urutkan berdasarkan nilai absolut net asing (paling aktif)
+    results = sorted(results, key=lambda x: abs(x['net_foreign']), reverse=True)
+    return results
