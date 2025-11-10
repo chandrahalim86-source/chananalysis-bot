@@ -1,8 +1,9 @@
-Flask
-hypercorn
+Flask==2.3.2
+hypercorn==0.15.0
 python-telegram-bot==20.3
-requests
-schedule
-beautifulsoup4
-pandas
-numpy
+requests==2.31.0
+schedule==1.1.0
+beautifulsoup4==4.12.2
+pandas==2.2.2
+numpy==1.26.4
+lxml==4.9.3
