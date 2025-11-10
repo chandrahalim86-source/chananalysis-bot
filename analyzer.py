@@ -1,61 +1,103 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 
-def analyze_top_stocks(days=15, top_n=20, min_liquidity=10_000_000_000):
-    # === Dummy data generator ===
-    # Gantilah bagian ini dengan koneksi data real kamu nanti
-    stocks = ["TLKM", "BBCA", "BMRI", "ASII", "BBRI", "BBNI", "ADRO", "MDKA", "UNVR", "ICBP",
-              "INDF", "ANTM", "PGAS", "SMGR", "AKRA", "CPIN", "MYOR", "TOWR", "ESSA", "BRIS"]
-    np.random.seed(42)
-    
-    results = []
-    for stock in stocks[:top_n]:
-        net_foreign = np.random.randint(-200_000_000, 200_000_000)
-        retail_flow = -net_foreign + np.random.randint(-20_000_000, 20_000_000)
-        last_price = np.random.randint(1000, 7000)
-        avg_price = last_price + np.random.randint(-200, 200)
-        liquidity = np.random.randint(min_liquidity, min_liquidity * 2)
-        ch_score = np.random.uniform(20, 90)
-        corr = np.random.uniform(-0.9, 0.9)
-        signal = "Strong Accumulation" if net_foreign > 50_000_000 else (
-                 "Strong Distribution" if net_foreign < -50_000_000 else "Neutral")
+# =========================================
+# SMART ADAPTIVE PRO V3.0 FINAL STABLE
+# =========================================
 
-        # Dynamic interpretation
-        conclusion = []
-        if net_foreign > 50_000_000:
-            conclusion.append("Asing terlihat melakukan akumulasi.")
-            if corr < -0.6:
-                conclusion.append("Divergensi kuat dengan ritel — indikasi *hidden accumulation*.")
-        elif net_foreign < -50_000_000:
-            conclusion.append("Asing mulai distribusi.")
-            if corr < -0.6:
-                conclusion.append("Divergensi kuat dengan ritel — bisa jadi *early reversal signal*.")
-        else:
-            conclusion.append("Aksi asing relatif netral terhadap ritel.")
+def fetch_foreign_data():
+    """
+    Ambil 15 hari data foreign net buy/sell dari RTI (atau fallback Stockbit)
+    """
+    try:
+        url = "https://api.rti.co.id/api/foreign-accumulation"
+        response = requests.get(url, timeout=10)
+        data = response.json()["data"]
+        df = pd.DataFrame(data)
+        df["foreign_net"] = df["buy_value"] - df["sell_value"]
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.groupby("code").tail(15)
+        return df
+    except Exception as e:
+        print("Fallback source triggered:", e)
+        # fallback dummy (replace later if needed)
+        cols = ["code", "date", "foreign_net", "price", "volume"]
+        return pd.DataFrame(columns=cols)
 
-        suggestion = (
-            f"Selama harga bertahan di atas Rp {last_price*0.97:,.0f} dan tren naik, "
-            f"hold atau tambah saat koreksi diperbolehkan."
-            if net_foreign > 0
-            else f"Jika harga tembus Rp {last_price*0.97:,.0f}, pertimbangkan take profit atau reduce position."
-        )
 
-        summary = (
-            f"*{stock}* — {signal}\n"
-            f"Rata-rata beli/jual asing: Rp {avg_price:,}\n"
-            f"Harga terakhir: Rp {last_price:,}\n"
-            f"Net Asing (10d): Rp {net_foreign:,} | Ritel: Rp {retail_flow:,}\n"
-            f"Likuiditas avg: Rp {liquidity:,}\n"
-            f"ChanScore: {ch_score:.1f}/100\n"
-            f"🔄 Korelasi asing-ritel: {corr:.2f}\n\n"
-            f"📈 Kesimpulan:\n- {' '.join(conclusion)}\n- {suggestion}\n\n"
-        )
-        results.append(summary)
+def calculate_chan_score(df):
+    """
+    Hitung skor akumulasi asing & kekuatan tren
+    """
+    if df.empty:
+        return pd.DataFrame()
 
-    report = (
-        f"*Laporan Akumulasi Asing ({days} Hari)*\n"
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        + "\n".join(results)
+    result = []
+    for code, data in df.groupby("code"):
+        data = data.sort_values("date")
+        foreign_acc = data["foreign_net"].sum()
+        vol = data["volume"].sum() if "volume" in data else 1
+        last_price = data["price"].iloc[-1] if "price" in data else np.nan
+
+        avg_foreign = data["foreign_net"].mean()
+        trend_strength = np.sign(avg_foreign) * np.log1p(abs(avg_foreign)) / 10
+        score = np.clip((foreign_acc / vol) * 100 + trend_strength * 50, -100, 100)
+
+        result.append({
+            "code": code,
+            "foreign_acc": foreign_acc,
+            "chan_score": round(score, 2),
+            "price": last_price
+        })
+    return pd.DataFrame(result)
+
+
+def interpret_score(row):
+    """
+    Buat kesimpulan otomatis berbasis skor dan arah akumulasi
+    """
+    code = row["code"]
+    score = row["chan_score"]
+    acc = row["foreign_acc"]
+    price = row["price"]
+
+    if score > 50:
+        note = "Asing akumulasi kuat, potensi uptrend lanjut."
+    elif 20 < score <= 50:
+        note = "Akumulasi moderat, tren mulai positif."
+    elif -20 <= score <= 20:
+        note = "Netral, tunggu konfirmasi arah harga & asing."
+    elif -50 <= score < -20:
+        note = "Distribusi ringan, waspadai potensi koreksi."
+    else:
+        note = "Distribusi asing signifikan, risiko koreksi tinggi."
+
+    kesimpulan = (
+        f"📊 *{code}*\n"
+        f"💰 Foreign Acc: {acc:,.0f}\n"
+        f"📈 ChanScore: {score}\n"
+        f"💵 Harga akhir: Rp{price:,.0f}\n\n"
+        f"📋 Kesimpulan: {note}\n"
+        "━━━━━━━━━━━━━━━\n"
     )
+    return kesimpulan
+
+
+def generate_report():
+    """
+    Analisis 20 saham foreign accumulation terbesar 15 hari terakhir
+    """
+    raw = fetch_foreign_data()
+    if raw.empty:
+        return "❌ Gagal mengambil data foreign accumulation."
+
+    scored = calculate_chan_score(raw)
+    top20 = scored.sort_values("foreign_acc", ascending=False).head(20)
+
+    report = "📈 *LAPORAN FOREIGN ACCUMULATION – 15 HARI TERAKHIR*\n━━━━━━━━━━━━━━━\n\n"
+    for _, row in top20.iterrows():
+        report += interpret_score(row) + "\n"
+    report += f"📅 Update: {datetime.now().strftime('%d %b %Y %H:%M')} WIB"
     return report
