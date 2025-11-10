@@ -1,103 +1,144 @@
 import pandas as pd
 import numpy as np
-import requests
 from datetime import datetime, timedelta
+from data_fetcher import get_combined_data
 
-# =========================================
-# SMART ADAPTIVE PRO V3.0 FINAL STABLE
-# =========================================
+# =========================
+# SMART ADAPTIVE PRO ANALYZER
+# =========================
 
-def fetch_foreign_data():
+def compute_chanscore(df):
     """
-    Ambil 15 hari data foreign net buy/sell dari RTI (atau fallback Stockbit)
+    Hitung skor akumulasi asing dan strength tren harga.
+    Range hasil: 0 – 100
     """
-    try:
-        url = "https://api.rti.co.id/api/foreign-accumulation"
-        response = requests.get(url, timeout=10)
-        data = response.json()["data"]
-        df = pd.DataFrame(data)
-        df["foreign_net"] = df["buy_value"] - df["sell_value"]
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.groupby("code").tail(15)
-        return df
-    except Exception as e:
-        print("Fallback source triggered:", e)
-        # fallback dummy (replace later if needed)
-        cols = ["code", "date", "foreign_net", "price", "volume"]
-        return pd.DataFrame(columns=cols)
+    if df.empty or len(df) < 5:
+        return 0, "Insufficient Data"
+
+    # Net asing kumulatif & slope harga
+    net_foreign = df['net_foreign'].sum()
+    price_change = (df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0] * 100
+
+    # Korelasi asing dengan harga (divergence check)
+    corr = df['net_foreign'].corr(df['close'])
+    if np.isnan(corr):
+        corr = 0
+
+    # Skor utama
+    score = 50 + (net_foreign / abs(net_foreign) * min(abs(price_change), 10) * 2 if net_foreign != 0 else 0)
+    score += corr * 20
+
+    # Boundaries
+    score = max(0, min(100, round(score, 1)))
+
+    # Klasifikasi
+    if score >= 70:
+        phase = "Strong Accumulation"
+    elif 55 <= score < 70:
+        phase = "Moderate Accumulation"
+    elif 45 <= score < 55:
+        phase = "Neutral"
+    elif 30 <= score < 45:
+        phase = "Moderate Distribution"
+    else:
+        phase = "Strong Distribution"
+
+    return score, phase
 
 
-def calculate_chan_score(df):
+def interpret_signal(symbol, df, score, phase):
     """
-    Hitung skor akumulasi asing & kekuatan tren
+    Hasilkan interpretasi & kesimpulan akhir berbasis kondisi asing & tren harga.
     """
     if df.empty:
-        return pd.DataFrame()
+        return f"{symbol}: Data tidak tersedia."
 
-    result = []
-    for code, data in df.groupby("code"):
-        data = data.sort_values("date")
-        foreign_acc = data["foreign_net"].sum()
-        vol = data["volume"].sum() if "volume" in data else 1
-        last_price = data["price"].iloc[-1] if "price" in data else np.nan
+    # Info dasar
+    last_price = df['close'].iloc[-1]
+    last_change = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100 if len(df) >= 2 else 0
+    avg_liquidity = df['value'].mean()
+    net_10d = df['net_foreign'].tail(10).sum()
+    net_retail = -net_10d  # Approximation, since total = foreign + retail ~ 0
 
-        avg_foreign = data["foreign_net"].mean()
-        trend_strength = np.sign(avg_foreign) * np.log1p(abs(avg_foreign)) / 10
-        score = np.clip((foreign_acc / vol) * 100 + trend_strength * 50, -100, 100)
+    corr = df['net_foreign'].corr(df['close'])
+    divergence = "Yes" if abs(corr) < 0.3 else "No"
 
-        result.append({
-            "code": code,
-            "foreign_acc": foreign_acc,
-            "chan_score": round(score, 2),
-            "price": last_price
-        })
-    return pd.DataFrame(result)
-
-
-def interpret_score(row):
-    """
-    Buat kesimpulan otomatis berbasis skor dan arah akumulasi
-    """
-    code = row["code"]
-    score = row["chan_score"]
-    acc = row["foreign_acc"]
-    price = row["price"]
-
-    if score > 50:
-        note = "Asing akumulasi kuat, potensi uptrend lanjut."
-    elif 20 < score <= 50:
-        note = "Akumulasi moderat, tren mulai positif."
-    elif -20 <= score <= 20:
-        note = "Netral, tunggu konfirmasi arah harga & asing."
-    elif -50 <= score < -20:
-        note = "Distribusi ringan, waspadai potensi koreksi."
+    # Interpretasi tambahan (otomatis)
+    kesimpulan = ""
+    if "Accumulation" in phase:
+        if last_change > 0 and corr > 0:
+            kesimpulan = (
+                "📈 Asing masih akumulasi konsisten, tren naik sehat. "
+                "Hold / tambah saat koreksi ringan. Hindari jual terlalu cepat."
+            )
+        else:
+            kesimpulan = (
+                "📈 Asing akumulasi namun harga belum menguat. Sinyal potensi breakout, pantau volume."
+            )
+    elif "Distribution" in phase:
+        if corr < 0:
+            kesimpulan = (
+                "⚠️ Asing mulai distribusi dan harga melemah. "
+                "Jika tren turun berlanjut, pertimbangkan take profit / kurangi posisi."
+            )
+        else:
+            kesimpulan = (
+                "⚠️ Asing jual ringan namun harga stabil. Waspadai potensi distribusi lebih besar."
+            )
     else:
-        note = "Distribusi asing signifikan, risiko koreksi tinggi."
+        kesimpulan = (
+            "⏸️ Sinyal netral, tunggu konfirmasi arah berikutnya sebelum ambil keputusan."
+        )
 
-    kesimpulan = (
-        f"📊 *{code}*\n"
-        f"💰 Foreign Acc: {acc:,.0f}\n"
-        f"📈 ChanScore: {score}\n"
-        f"💵 Harga akhir: Rp{price:,.0f}\n\n"
-        f"📋 Kesimpulan: {note}\n"
-        "━━━━━━━━━━━━━━━\n"
-    )
-    return kesimpulan
+    # Fleksibilitas jual: jangan terlalu cepat jika asing masih akumulasi
+    if "Distribution" in phase and corr > -0.5:
+        kesimpulan += "\n💡 Catatan: Distribusi belum kuat, tunggu konfirmasi lanjut sebelum jual penuh."
 
+    # Format laporan
+    report = f"""*{symbol}* — Asing {phase}
 
-def generate_report():
-    """
-    Analisis 20 saham foreign accumulation terbesar 15 hari terakhir
-    """
-    raw = fetch_foreign_data()
-    if raw.empty:
-        return "❌ Gagal mengambil data foreign accumulation."
-
-    scored = calculate_chan_score(raw)
-    top20 = scored.sort_values("foreign_acc", ascending=False).head(20)
-
-    report = "📈 *LAPORAN FOREIGN ACCUMULATION – 15 HARI TERAKHIR*\n━━━━━━━━━━━━━━━\n\n"
-    for _, row in top20.iterrows():
-        report += interpret_score(row) + "\n"
-    report += f"📅 Update: {datetime.now().strftime('%d %b %Y %H:%M')} WIB"
+Rata-rata beli/jual asing: Rp {df['close'].mean():,.0f}
+Harga terakhir: Rp {last_price:,.0f} ({last_change:.1f}%)
+Net Asing (10d): Rp {net_10d:,.0f} | Ritel: Rp {net_retail:,.0f}
+Likuiditas avg: Rp {avg_liquidity:,.0f}
+ChanScore: {score} → {phase}
+📊 Divergensi: {divergence} (corr={corr:.2f})
+🔹 Kesimpulan: {kesimpulan}
+"""
     return report
+
+
+def analyze_top_stocks(symbols, period=15, min_liquidity=10_000_000_000, top_n=20):
+    """
+    Analisa seluruh saham, pilih yang paling akumulatif & likuid.
+    """
+    results = []
+
+    for symbol in symbols:
+        df = get_combined_data(symbol, period)
+        if df.empty:
+            continue
+
+        avg_liq = df['value'].mean()
+        if avg_liq < min_liquidity:
+            continue
+
+        score, phase = compute_chanscore(df)
+        results.append({
+            'symbol': symbol,
+            'score': score,
+            'phase': phase,
+            'df': df
+        })
+
+    # Urutkan dari akumulasi terbesar
+    ranked = sorted(results, key=lambda x: x['score'], reverse=True)[:top_n]
+
+    # Format teks laporan untuk Telegram
+    text_blocks = []
+    for item in ranked:
+        section = interpret_signal(item['symbol'], item['df'], item['score'], item['phase'])
+        text_blocks.append(section)
+
+    final_report = "\n\n" + ("—" * 30 + "\n\n").join(text_blocks)
+    return final_report
