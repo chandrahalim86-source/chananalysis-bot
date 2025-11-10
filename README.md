@@ -1,33 +1,25 @@
-# Chananalysis Bot 📈
+# 📈 Auto Stock Analyzer Pro v3.0
 
-Bot Telegram otomatis untuk analisa harian saham Indonesia (IHSG) berdasarkan akumulasi beli asing dan bandar.
+## ⚙️ Fitur Utama
+- Analisa akumulasi / distribusi asing & ritel
+- Deteksi divergensi asing-ritel (indikasi early reversal)
+- ChanScore (indikator kekuatan tren)
+- Kesimpulan otomatis (hold, take profit, buy weakness, dll)
+- Laporan otomatis dikirim setiap jam **18:00 WIB**
+- Perintah manual via `/analyze` untuk update kapanpun
 
-## 🧠 Fitur Utama
-- Mengambil data akumulasi beli/jual asing & bandar (RTI/BEI/Stockbit)
-- Mengirim laporan otomatis ke Telegram setiap hari pukul 18:00 WIB
-- Berjalan otomatis di cloud (Render.com)
+## 🧩 Environment Variables
+| Nama | Deskripsi | Default |
+|------|------------|----------|
+| TELEGRAM_TOKEN | Token bot Telegram kamu | - |
+| CHAT_ID | ID grup atau user Telegram penerima laporan | - |
+| ANALYSIS_PERIOD | Jumlah hari analisa | 15 |
+| TOP_N | Jumlah saham tertinggi yang ditampilkan | 20 |
+| SCHEDULE_UTC_EVENING | Jam UTC untuk laporan sore (18:00 WIB = 11:00) | 11:00 |
+| TIMEZONE | Zona waktu lokal | Asia/Jakarta |
 
-## ⚙️ Teknologi
-- Python 3
-- Library: `requests`, `schedule`
-- Telegram Bot API
-- Render (free cloud hosting)
-
-## 🚀 Cara Kerja
-1. Mengambil data akumulasi asing dari API sumber data
-2. Menganalisis saham dengan akumulasi positif minimal 1 minggu
-3. Mengirim hasil ke channel/pesan Telegram via bot
-
-## 🗓 Jadwal
-Bot dijadwalkan otomatis setiap hari:
-- **Jam 18:00 WIB (11:00 UTC)**
-
-## 👤 Owner
-Bot ini dibuat untuk **@Chan7878Bot**  
-Channel analisis: *Chananalysis7878*
-
----
-
-> Dikembangkan oleh Chandra Halim  
-> Untuk keperluan riset dan monitoring saham otomatis.
-
+## 🚀 Cara Jalankan
+1. Upload semua file (`main.py`, `analyzer.py`, `requirements.txt`, `README.md`) ke Render.
+2. Masukkan semua variabel environment di atas.
+3. Deploy → Bot otomatis kirim laporan jam 18:00 WIB setiap hari bursa.
+4. Bisa jalankan manual via Telegram dengan perintah:  
