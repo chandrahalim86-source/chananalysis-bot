@@ -1,149 +1,79 @@
 import os
-import logging
+import pytz
 import asyncio
-import threading
-import time
-import schedule
-import requests
-from datetime import datetime, timezone
-from flask import Flask
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from hypercorn.asyncio import serve
-from hypercorn.config import Config
-from analyzer import generate_report  # ✅ import yang benar
+from datetime import datetime, time
+from analyzer import analyze_foreign_flow
 
-# ====================================================
-# KONFIGURASI ENVIRONMENT
-# ====================================================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SCHEDULE_UTC_MORNING = os.getenv("SCHEDULE_UTC_MORNING", "01:00")  # 08:00 WIB
-SCHEDULE_UTC_EVENING = os.getenv("SCHEDULE_UTC_EVENING", "11:00")  # 18:00 WIB
+# --- Telegram Bot setup ---
+from telegram import Bot
+from telegram.ext import Application, CommandHandler
 
-if not TOKEN:
-    raise RuntimeError("⚠️ Missing TELEGRAM_BOT_TOKEN in environment variables")
-if not CHAT_ID:
-    raise RuntimeError("⚠️ Missing TELEGRAM_CHAT_ID in environment variables")
+# Environment variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+ANALYSIS_PERIOD = int(os.getenv("ANALYSIS_PERIOD", 15))
+TOP_N = int(os.getenv("TOP_N", 20))
+TIMEZONE = pytz.timezone("Asia/Jakarta")
+SCHEDULE_UTC_EVENING = "11:00"  # 18:00 WIB = 11:00 UTC
 
-# ====================================================
-# LOGGING
-# ====================================================
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger("chananalysis")
+bot = Bot(token=TELEGRAM_TOKEN)
 
-# ====================================================
-# HANDLER TELEGRAM
-# ====================================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Halo 👋, saya *Chananalysis Bot Pro*!\n"
-        "Saya akan kirimkan laporan akumulasi asing & ritel setiap hari:\n"
-        "🕗 08:00 WIB — Laporan Harian\n"
-        "🕕 18:00 WIB — Evaluasi Sore\n\n"
-        "Ketik /id untuk lihat chat ID kamu.",
-        parse_mode="Markdown"
+# --- Dummy fetch (replace with real data source) ---
+def fetch_data():
+    import random
+    symbols = ["BBCA", "TLKM", "ASII", "BBRI", "UNVR", "BMRI", "BBNI", "CPIN", "ICBP", "INDF", "ANTM", "ADRO", "MDKA", "UNTR", "PGAS", "PTBA", "SIDO", "AKRA", "TPIA", "BRIS"]
+    data = {}
+    for s in symbols:
+        df = pd.DataFrame({
+            "close": [random.randint(1000, 6000) for _ in range(ANALYSIS_PERIOD)],
+            "foreign_net": [random.uniform(-5e7, 5e7) for _ in range(ANALYSIS_PERIOD)],
+            "retail_net": [random.uniform(-5e7, 5e7) for _ in range(ANALYSIS_PERIOD)],
+            "value": [random.uniform(1e9, 2e10) for _ in range(ANALYSIS_PERIOD)],
+        })
+        data[s] = df
+    return data
+
+# --- Report Builder ---
+def format_report(results):
+    header = f"📊 *Laporan Akumulasi Asing ({ANALYSIS_PERIOD} Hari)*\nGenerated: {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S WIB')}\nTop {TOP_N} Saham Likuid\n\n"
+    lines = []
+    for r in results[:TOP_N]:
+        text = (
+            f"*{r['symbol']}* — Asing jual {r['foreign_sell_days']}/{r['period']} hari ({'Distribusi' if r['net_foreign'] < 0 else 'Akumulasi'})\n"
+            f"Rata-rata beli/jual asing: Rp {r['avg_foreign']:,}\n"
+            f"Harga terakhir: Rp {r['last_price']:,} ({r['price_change']}%)\n"
+            f"Net Asing ({r['period']}d): Rp {r['net_foreign'] / 1e6:.1f}M | Ritel: Rp {r['net_retail'] / 1e6:.1f}M\n"
+            f"Likuiditas avg: Rp {r['avg_value'] / 1e9:.1f}B\n"
+            f"ChanScore: {r['chscore']}/100 → {r['trend']}\n"
+            f"🔄 Divergensi: {r['divergensi']} (corr={r['corr']})\n"
+            f"📈 Kesimpulan: {r['kesimpulan']}\n"
+        )
+        lines.append(text)
+    return header + "\n\n".join(lines)
+
+async def send_report():
+    data = fetch_data()
+    results = analyze_foreign_flow(data, period=ANALYSIS_PERIOD)
+    report = format_report(results)
+    await bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="Markdown")
+
+async def analyze_command(update, context):
+    await send_report()
+    await update.message.reply_text("✅ Analisa manual selesai — laporan sudah dikirim.", parse_mode="Markdown")
+
+def schedule_jobs(app):
+    hour, minute = map(int, SCHEDULE_UTC_EVENING.split(":"))
+    app.job_queue.run_daily(
+        send_report,
+        time=time(hour=hour, minute=minute, tzinfo=pytz.UTC),
+        name="evening_report",
     )
 
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("analyze", analyze_command))
+    schedule_jobs(app)
+    app.run_polling()
 
-# ====================================================
-# TELEGRAM BOT
-# ====================================================
-async def run_bot():
-    logger.info("🚀 Memulai Chananalysis Bot…")
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("id", get_id))
-
-    await app.initialize()
-    await app.start()
-    logger.info("✅ Bot Telegram aktif (polling).")
-
-    try:
-        await app.updater.start_polling(poll_interval=3)
-        await asyncio.Event().wait()
-    finally:
-        await app.stop()
-        await app.shutdown()
-
-def run_bot_background():
-    asyncio.run(run_bot())
-
-# ====================================================
-# FUNGSI KIRIM PESAN TELEGRAM
-# ====================================================
-def send_message(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code != 200:
-            logger.error("❌ Gagal kirim Telegram message: %s - %s", r.status_code, r.text)
-        else:
-            logger.info("✅ Pesan terkirim ke Telegram.")
-    except Exception as e:
-        logger.exception("Gagal kirim pesan Telegram: %s", e)
-
-# ====================================================
-# JOB HARIAN
-# ====================================================
-def run_daily_job(period="morning"):
-    now = datetime.now(timezone.utc)
-    logger.info("🕗 Menjalankan job harian (%s) — %s", period, now)
-
-    try:
-        report_text = generate_report(period=period)
-        send_message(report_text)
-    except Exception as e:
-        logger.exception("❌ Gagal membuat laporan (%s): %s", period, e)
-        send_message(f"❌ Gagal membuat laporan ({period}): {e}")
-
-# ====================================================
-# SCHEDULER THREAD
-# ====================================================
-def scheduler_thread():
-    logger.info(
-        "🗓️ Menjadwalkan laporan pagi jam %s UTC (~08:00 WIB) dan sore jam %s UTC (~18:00 WIB)",
-        SCHEDULE_UTC_MORNING, SCHEDULE_UTC_EVENING
-    )
-    schedule.clear()
-    schedule.every().day.at(SCHEDULE_UTC_MORNING).do(run_daily_job, period="morning")
-    schedule.every().day.at(SCHEDULE_UTC_EVENING).do(run_daily_job, period="evening")
-
-    while True:
-        schedule.run_pending()
-        time.sleep(5)
-
-# ====================================================
-# FLASK APP
-# ====================================================
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "✅ Chananalysis Bot Pro aktif dan siap kirim laporan harian & sore."
-
-def init_bot():
-    threading.Thread(target=run_bot_background, daemon=True).start()
-    threading.Thread(target=scheduler_thread, daemon=True).start()
-    logger.info("✅ Bot dan scheduler background aktif.")
-
-# ====================================================
-# ENTRY POINT
-# ====================================================
 if __name__ == "__main__":
-    init_bot()
-    config = Config()
-    config.bind = ["0.0.0.0:10000"]
-    asyncio.run(serve(app, config))
+    main()
