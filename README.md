@@ -1,43 +1,32 @@
-# 📊 Telegram Auto Stock Analyzer — Profesional Edition
+# Foreign Flow Monitor (Telegram Bot)
 
-Bot otomatis untuk menganalisis pergerakan saham di IDX (Indonesia Stock Exchange) dengan indikator:
-- Akumulasi / Distribusi asing
-- Divergensi asing vs ritel
-- Kesimpulan otomatis (rekomendasi hold / take profit / reduce)
-- Penjadwalan otomatis (scheduler)
-- Perintah manual `/analyze`
+Bot ini mengirimkan laporan *akumulasi & distribusi asing* di saham-saham likuid BEI.
 
 ---
 
-## ⚙️ Environment Variables
-Wajib diisi di Render (Environment tab):
+## 🔧 Konfigurasi Environment (di Render)
 
 | Variable | Deskripsi | Contoh |
 |-----------|------------|--------|
-| `TELEGRAM_TOKEN` | Token bot Telegram | `123456:ABC...` |
-| `CHAT_ID` | Chat ID tujuan laporan | `-100123456789` |
-| `ANALYSIS_PERIOD` | Periode analisis (hari) | `15` |
-| `TOP_N` | Jumlah saham teratas yang dianalisis | `20` |
-| `MIN_LIQUIDITY_VALUE` | Filter minimum likuiditas | `10000000000` |
-| `SCHEDULE_UTC_EVENING` | Jadwal UTC untuk 18:00 WIB | `11` |
+| `BOT_TOKEN` | Token Telegram bot kamu | `123456:ABC-DEF...` |
+| `CHAT_ID` | Chat ID penerima laporan | `123456789` |
+| `ANALYSIS_PERIOD` | Periode analisa (hari) | `15` |
+| `TOP_N` | Jumlah saham teratas dikirim | `20` |
+| `MIN_LIQUIDITY_VALUE` | Likuiditas minimum | `10000000000` |
+| `SCHEDULE_UTC_EVENING` | Jam kirim otomatis UTC | `11:00` (setara 18:00 WIB) |
 
 ---
 
-## 🕒 Jadwal Analisa Otomatis
-Bot akan otomatis kirim laporan setiap hari jam **18:00 WIB (11:00 UTC)**.  
-Laporan berisi 20 saham teratas dengan format terstruktur.
-
----
-
-## 💬 Perintah Manual
-Ketik di Telegram:
+## 🚀 Fitur
+- Otomatis kirim laporan jam **18:00 WIB**
+- Bisa jalankan manual via perintah Telegram:
 /analyze
-untuk memicu laporan kapanpun secara langsung.
+- Format laporan profesional, lengkap dengan kesimpulan otomatis dan saran tindakan.
 
 ---
 
-## 🧱 Cara Deploy di Render
-1. Upload semua file (`main.py`, `analyzer.py`, `requirements.txt`, `README.md`)
-2. Isi Environment Variables sesuai tabel di atas
-3. Clear Build Cache → Redeploy
-4. Selesai ✅
+## 🧩 Jalankan Lokal (Opsional)
+```bash
+pip install -r requirements.txt
+python main.py
+
