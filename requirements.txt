@@ -5,3 +5,4 @@ requests
 schedule
 beautifulsoup4
 pandas
+numpy
