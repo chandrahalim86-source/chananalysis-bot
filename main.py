@@ -1,134 +1,56 @@
-import os
-import logging
-import asyncio
-import threading
-import time
-import schedule
-import requests
-from datetime import datetime, timezone
 from flask import Flask
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from hypercorn.asyncio import serve
-from hypercorn.config import Config
-from analyzer import generate_report  # ✅ import analyzer terbaru
+import schedule
+import time
+import threading
+from telegram import Bot
+from analyzer import analyze_stock
+import pandas as pd
+import random
 
-# ====================================================
-# KONFIGURASI
-# ====================================================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-SCHEDULE_UTC_TIME = os.getenv("SCHEDULE_UTC_TIME", "01:00")  # 01:00 UTC ≈ 08:00 WIB
-
-if not TOKEN:
-    raise RuntimeError("⚠️ Missing TELEGRAM_BOT_TOKEN in environment variables")
-if not CHAT_ID:
-    raise RuntimeError("⚠️ Missing TELEGRAM_CHAT_ID in environment variables")
-
-# ====================================================
-# LOGGING
-# ====================================================
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger("chananalysis")
-
-# ====================================================
-# HANDLER TELEGRAM
-# ====================================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Halo 👋, saya *Chananalysis Bot*!\n"
-        "Saya kirimkan laporan akumulasi asing setiap hari jam 08:00 WIB.\n"
-        "Ketik /id untuk lihat chat ID kamu.",
-        parse_mode="Markdown"
-    )
-
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    await update.message.reply_text(f"Chat ID kamu: `{chat_id}`", parse_mode="Markdown")
-
-# ====================================================
-# BOT ASYNC
-# ====================================================
-async def run_bot():
-    logger.info("🚀 Memulai Chananalysis Bot…")
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("id", get_id))
-    await app.initialize()
-    await app.start()
-    logger.info("✅ Bot Telegram aktif (polling).")
-
-    try:
-        await app.updater.start_polling(poll_interval=3)
-        await asyncio.Event().wait()
-    finally:
-        await app.stop()
-        await app.shutdown()
-
-def run_bot_background():
-    asyncio.run(run_bot())
-
-# ====================================================
-# KIRIM PESAN TELEGRAM
-# ====================================================
-def send_message(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code != 200:
-            logger.error("Gagal kirim Telegram message: %s - %s", r.status_code, r.text)
-        else:
-            logger.info("✅ Pesan terkirim ke Telegram.")
-    except Exception as e:
-        logger.exception("Gagal kirim pesan Telegram: %s", e)
-
-# ====================================================
-# JOB HARIAN
-# ====================================================
-def run_daily_job():
-    now = datetime.now(timezone.utc)
-    logger.info("🕗 Menjalankan job harian %s", now)
-    try:
-        report_text = generate_report()
-        send_message(report_text)
-    except Exception as e:
-        logger.exception("❌ Gagal membuat laporan: %s", e)
-        send_message(f"❌ Gagal membuat laporan: {e}")
-
-# ====================================================
-# SCHEDULER THREAD
-# ====================================================
-def scheduler_thread():
-    logger.info("🗓️ Menjadwalkan laporan harian jam %s UTC (~08:00 WIB)", SCHEDULE_UTC_TIME)
-    schedule.clear()
-    schedule.every().day.at(SCHEDULE_UTC_TIME).do(run_daily_job)
-    while True:
-        schedule.run_pending()
-        time.sleep(5)
-
-# ====================================================
-# FLASK APP
-# ====================================================
 app = Flask(__name__)
 
-@app.route("/")
-def index():
-    return "✅ Chananalysis Bot aktif dan siap kirim laporan harian."
+# --- Telegram setup ---
+BOT_TOKEN = "ISI_DENGAN_TOKEN_TELEGRAM_BOTMU"
+CHAT_ID = "ISI_DENGAN_CHAT_ID_KAMU"
+bot = Bot(token=BOT_TOKEN)
 
-def init_bot():
-    threading.Thread(target=run_bot_background, daemon=True).start()
-    threading.Thread(target=scheduler_thread, daemon=True).start()
-    logger.info("✅ Bot dan scheduler background aktif.")
+# --- Fungsi dummy untuk simulasi data ---
+def get_stock_data(ticker):
+    # Simulasi data historis 10 hari
+    np.random.seed(hash(ticker) % 1000)
+    data = {
+        'Close': np.random.randint(1000, 4000, 10),
+        'Volume': np.random.randint(1000000, 5000000, 10),
+        'Foreign_Buy': np.random.randint(200000, 800000, 10),
+        'Foreign_Sell': np.random.randint(200000, 800000, 10),
+        'Retail_Buy': np.random.randint(200000, 800000, 10),
+        'Retail_Sell': np.random.randint(200000, 800000, 10)
+    }
+    return pd.DataFrame(data)
 
-# ====================================================
-# ENTRY POINT
-# ====================================================
-if __name__ == "__main__":
-    init_bot()
-    config = Config()
-    config.bind = ["0.0.0.0:10000"]
-    asyncio.run(serve(app, config))
+# --- Fungsi utama analisa & kirim report ---
+def run_analysis():
+    tickers = ["BBCA", "TLKM", "BMRI", "BBRI", "ASII"]
+    for t in tickers:
+        df = get_stock_data(t)
+        report = analyze_stock(df, t)
+        bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="Markdown")
+
+# --- Scheduler otomatis ---
+def schedule_jobs():
+    schedule.every().day.at("08:00").do(run_analysis)
+    schedule.every().day.at("18:00").do(run_analysis)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Jalankan scheduler di thread terpisah
+threading.Thread(target=schedule_jobs, daemon=True).start()
+
+@app.route('/')
+def home():
+    return "📊 Stock Analyzer Bot aktif & siap kirim laporan setiap jam 08:00 & 18:00 WIB."
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
