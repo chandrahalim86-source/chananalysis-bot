@@ -5,3 +5,4 @@ requests==2.32.3
 Flask==3.0.3
 python-telegram-bot==20.7
 schedule==1.2.1
+pytz==2024.1
