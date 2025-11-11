@@ -1,89 +1,114 @@
+# main.py
 import os
+import logging
+import asyncio
 import threading
-import schedule
 import time
-import pytz
-from datetime import datetime
+import schedule
+import requests
+from datetime import datetime, timezone
 from flask import Flask
-from telegram import Bot
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from hypercorn.asyncio import serve
+from hypercorn.config import Config
+
 from analyzer import analyze_foreign_flow
 
-# --- Flask app untuk "port binding" Render (agar tetap gratis) ---
-app = Flask(__name__)
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ANALYSIS_PERIOD = int(os.getenv("ANALYSIS_PERIOD", "15"))
+TOP_N = int(os.getenv("TOP_N", "20"))
+MIN_LIQUIDITY_VALUE = float(os.getenv("MIN_LIQUIDITY_VALUE", "10000000000"))
+SCHEDULE_UTC_TIME = os.getenv("SCHEDULE_UTC_TIME_EVENING", "11:00")
 
-@app.route('/')
-def home():
-    return "✅ Smart Adaptive Pro Analyzer is running — Free Render Mode"
+if not TOKEN:
+    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN environment variable")
+if not CHAT_ID:
+    raise RuntimeError("Missing TELEGRAM_CHAT_ID environment variable")
 
-# --- Environment Variables ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger("chananalysis")
 
-ANALYSIS_PERIOD = int(os.getenv("ANALYSIS_PERIOD", 15))
-MIN_LIQUIDITY_VALUE = int(os.getenv("MIN_LIQUIDITY_VALUE", 10_000_000_000))
-TOP_N = int(os.getenv("TOP_N", 20))
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Halo 👋 Chananalysis Bot aktif.\n"
+        "Saya akan kirim laporan harian akumulasi asing. Ketik /analyze untuk laporan sekarang."
+    )
 
-SCHEDULE_UTC_HOUR = int(os.getenv("SCHEDULE_UTC_HOUR", 11))  # 11 UTC = 18:00 WIB
-
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-
-# --- Fungsi kirim laporan ---
-def send_report():
+async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Sedang membuat laporan... Harap tunggu.")
     try:
-        tz = pytz.timezone("Asia/Jakarta")
-        now = datetime.now(tz)
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"⏳ Memulai analisa saham asing otomatis ({now.strftime('%Y-%m-%d %H:%M:%S')}) ...")
-
-        report = analyze_foreign_flow(
-            period=ANALYSIS_PERIOD,
-            min_liquidity=MIN_LIQUIDITY_VALUE,
-            top_n=TOP_N
-        )
-
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=report, parse_mode="Markdown")
-
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Laporan selesai dikirim.\n\nGunakan /analyze kapan saja untuk manual run.")
+        text, _ = analyze_foreign_flow(analysis_period=ANALYSIS_PERIOD, top_n=TOP_N, min_liq=MIN_LIQUIDITY_VALUE)
+        await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as e:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"❌ Error saat analisa otomatis: {e}")
+        await update.message.reply_text(f"❌ Gagal membuat laporan: {e}")
 
-# --- Scheduler otomatis setiap 18:00 WIB ---
-def scheduler_job():
-    schedule.every().day.at("11:00").do(send_report)  # UTC 11 = 18:00 WIB
+async def run_bot():
+    logger.info("Starting Telegram bot (polling)...")
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("analyze", analyze_command))
+    await app.initialize()
+    await app.start()
+    logger.info("Telegram bot running (polling).")
+    try:
+        await app.updater.start_polling(poll_interval=3)
+        await asyncio.Event().wait()
+    finally:
+        await app.stop()
+        await app.shutdown()
+
+def run_bot_background():
+    asyncio.run(run_bot())
+
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
+    try:
+        r = requests.post(url, json=payload, timeout=20)
+        if r.status_code != 200:
+            logger.error("Telegram send failed: %s %s", r.status_code, r.text)
+            return False
+        return True
+    except Exception as e:
+        logger.exception("Telegram send exception: %s", e)
+        return False
+
+def run_daily_job():
+    logger.info("Running daily job...")
+    try:
+        text, _ = analyze_foreign_flow()
+        success = send_telegram_message(text)
+        if success:
+            logger.info("Daily report sent successfully.")
+        else:
+            logger.error("Daily report failed to send.")
+    except Exception as e:
+        logger.exception("Daily job failed: %s", e)
+        send_telegram_message(f"❌ Daily job error: {e}")
+
+def scheduler_thread():
+    logger.info("Scheduler scheduled at %s UTC (~18:00 WIB)", SCHEDULE_UTC_TIME)
+    schedule.clear()
+    schedule.every().day.at(SCHEDULE_UTC_TIME).do(run_daily_job)
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        time.sleep(5)
 
-# --- Telegram Command Handler (/analyze manual) ---
-from telegram.ext import ApplicationBuilder, CommandHandler
+app = Flask(__name__)
 
-async def analyze_command(update, context):
-    await update.message.reply_text("⏳ Menjalankan analisa manual...")
-    try:
-        report = analyze_foreign_flow(
-            period=ANALYSIS_PERIOD,
-            min_liquidity=MIN_LIQUIDITY_VALUE,
-            top_n=TOP_N
-        )
-        await update.message.reply_text(report, parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Terjadi error: {e}")
+@app.route("/")
+def index():
+    return "✅ Chananalysis Bot (Smart Adaptive Pro v3.0) is running."
 
-def run_telegram_bot():
-    app_tg = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app_tg.add_handler(CommandHandler("analyze", analyze_command))
-    app_tg.run_polling()
-
-# --- Jalankan paralel (scheduler + telegram bot) ---
-def run_all():
-    threading.Thread(target=scheduler_job, daemon=True).start()
-    run_telegram_bot()
+def init_bot_and_scheduler():
+    threading.Thread(target=run_bot_background, daemon=True).start()
+    threading.Thread(target=scheduler_thread, daemon=True).start()
+    logger.info("Bot and scheduler started in background threads.")
 
 if __name__ == "__main__":
-    print("⏰ Scheduler aktif setiap 11:00 UTC (~18:00 WIB)")
-    print("🚀 Smart Adaptive Pro Analyzer aktif")
-
-    # Jalankan bot & scheduler di thread terpisah
-    threading.Thread(target=run_all, daemon=True).start()
-
-    # Jalankan Flask agar Render melihat port aktif
-    app.run(host="0.0.0.0", port=10000)
+    init_bot_and_scheduler()
+    config = Config()
+    config.bind = ["0.0.0.0:10000"]
+    asyncio.run(serve(app, config))
