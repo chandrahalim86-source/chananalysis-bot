@@ -1,24 +1,34 @@
-# 📊 Smart Adaptive Pro v2.3 — Telegram Foreign Flow Analyzer
+# Chananalysis Bot — Smart Adaptive Pro Final (v3.0)
 
-## 🔧 Fitur Utama
-- Analisa otomatis **jam 18:00 WIB** setiap hari
-- Analisa manual kapanpun via Telegram command `/analyze`
-- Berdasarkan data **Foreign Buy/Sell & Harga (RTI/Stockbit)**
-- Deteksi **divergensi asing vs ritel (early reversal)**
-- **Interpretasi otomatis & fleksibel**
-- Kirim laporan Telegram format teks profesional (20 saham teratas)
+## Tujuan
+Kirim laporan harian akumulasi asing IHSG (RTI primary, Stockbit fallback). Jadwal default: 18:00 WIB (11:00 UTC). Ada perintah on-demand `/analyze`.
 
-## 🧠 Parameter Environment
+## File
+- main.py
+- analyzer.py
+- data_fetcher.py
+- requirements.txt
 
-| Key | Value | Keterangan |
-|-----|--------|------------|
-| ANALYSIS_PERIOD | 15 | Periode analisa (hari) |
-| TOP_N | 20 | Jumlah saham top akumulasi |
-| MIN_LIQUIDITY_VALUE | 10000000000 | Filter likuiditas min Rp 10 M |
-| SCHEDULE_UTC_EVENING | 11:00 | Jam 18:00 WIB |
-| TELEGRAM_BOT_TOKEN | `xxxxxxxx` | Token bot kamu |
-| TELEGRAM_CHAT_ID | `xxxxxxxx` | Chat ID kamu |
+## Environment variables (Render)
+- `PYTHON_VERSION` = `3.12.7`  ← penting
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `RTI_API_BASE` (optional, default used if empty)
+- `RTI_EMAIL` (optional)
+- `RTI_PASSWORD` (optional)
+- `ANALYSIS_PERIOD` = `15`
+- `TOP_N` = `20`
+- `MIN_LIQUIDITY_VALUE` = `10000000000`
+- `SCHEDULE_UTC_TIME_EVENING` = `11:00`
 
-## 🚀 Cara Jalankan Manual
-```bash
-python main.py
+## Deploy steps (singkat)
+1. Replace repo files with the above files.
+2. In Render:
+   - Set `PYTHON_VERSION=3.12.7`
+   - Add the environment variables above (put secrets in env variables).
+   - Clear build cache (Render option) and then Deploy Latest Commit.
+3. After deploy: test Telegram `/start` and `/analyze`.
+
+## Notes
+- Gunakan only **one** bot instance (jika ada instance lain yang polling, matikan) untuk menghindari `Conflict` error.
+- Jika ada error build `pandas`, pastikan Python version sudah 3.12.7 and clear cache.
