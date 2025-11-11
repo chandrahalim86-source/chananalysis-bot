@@ -1,8 +1,9 @@
 pandas==2.2.2
 numpy==1.26.4
-matplotlib==3.8.4
 requests==2.32.3
-Flask==3.0.3
+Flask==2.3.2
+hypercorn==0.15.0
 python-telegram-bot==20.7
 schedule==1.2.1
-pytz==2024.1
+beautifulsoup4==4.12.2
+lxml==4.9.3
